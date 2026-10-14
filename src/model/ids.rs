@@ -38,6 +38,9 @@ pub mod class {
     pub const RAW_DATA: u32 = 0x129;
     /// A graphic's screen preview; chunk 0x119 names its raw data object.
     pub const PREVIEW: u32 = 0x1708;
+    /// The old link object that images of InDesign 2.0 to 5.0 name in
+    /// chunk 0x8C1B (`objects.md`, links of InDesign 2.0).
+    pub const OLD_LINK: u32 = 0x8C01;
     pub const FONT_FAMILY: u32 = 0x3E03;
     pub const LANGUAGE: u32 = 0x2D07;
     pub const TOC_STYLE: u32 = 0x11605;
@@ -342,6 +345,9 @@ pub mod chunk {
     /// u32 object of class 0x8C01 that images of InDesign 2.0 to 5.0 name
     /// (0 = none).
     pub const OLD_GRAPHIC_LINK: u32 = 0x8C1B;
+    /// Old link object: the linked file's path, a flagged in-object string
+    /// at offset 24 in files from InDesign 2.0.
+    pub const OLD_LINK_PATH: u32 = 0x8C04;
     pub const LINK_INFO: u32 = 0x8C9B;
     pub const LINK_RESOURCE_URI: u32 = 0x8C92;
     /// u32 PDF identifier of a link.

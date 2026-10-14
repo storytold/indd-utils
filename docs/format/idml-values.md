@@ -441,7 +441,18 @@ the last session of the save history (`objects.md`, save history):
 | every other version seen (7.0 to 21.5) | its major and minor version |
 
 The converter writes this value, from the header's version where the
-save history has none or names another major version. It matches 1,164
+save history has none or names another major version.
+
+**Documents from before 7.0.** IDML began with InDesign CS4 (DOM 6.0),
+and the oldest IDML in the corpus is from 7.0; documents from 2.0 to
+5.0 have no IDML pair. Their version is not a DOM version that any
+IDML has, so the converter writes `DOMVersion="7.0"` for them, and the
+`product` of an InDesign 7.0 export, `7.0(330)` (as in IDML files of
+7.0 published with the IDML schemas, metanorma/idml). The values it
+writes for these documents do not change: every version-dependent
+value block and writer branch starts at 8.0 or later. Before this, the
+packages of 2.0 to 5.0 documents carried their own version (`2.0`,
+`3.0`), which no InDesign release exported as IDML. It matches 1,164
 of 1,251 trustworthy pairs (the header's major version with `.0`
 matched 668). The others are files that a later release exported
 without saving them: 68 sessions of 10.1 whose IDML has 10.2, 16 of

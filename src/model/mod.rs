@@ -134,23 +134,44 @@ mod tests {
         assert_eq!(reader.warnings.borrow().len(), 2);
     }
 
+    /// Runs `f` on a thread with room for the reader's deepest recursion.
+    ///
+    /// `Reader::page_item` recurses once per nesting level, and at
+    /// [`MAX_ITEM_DEPTH`] a debug build needs between 3 and 4 MiB of stack --
+    /// about 35 KB a level, nearly all of it the reader's own frames
+    /// (`size_of::<PageItem>()` is 1224 bytes, so the structs are ~119 KB of
+    /// it). A test thread is given 2 MiB, so this overflowed and aborted the
+    /// whole run, and `cargo test` then hung instead of exiting; `tools/check.py`
+    /// never saw it because it tests `--release`, where the frames are far
+    /// smaller (#7).
+    fn with_room_for_the_deepest_nesting(f: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn a thread for the deep-nesting reader")
+            .join()
+            .expect("the deep-nesting reader panicked");
+    }
+
     #[test]
     fn deeply_nested_groups_are_left_out() {
-        let n = 3 * MAX_ITEM_DEPTH as u32;
-        let objects: Vec<_> = (1..=n)
-            .map(|u| group(u, &[u + 1][..(u < n) as usize]))
-            .collect();
-        let bytes = synthetic::image(&objects);
-        let db = synthetic::database(&bytes, &objects);
-        let reader = Reader::new(&db);
-        let mut item = reader.page_item(1, None).unwrap().unwrap();
-        let mut depth = 1;
-        while let Some(child) = item.children.pop() {
-            item = child;
-            depth += 1;
-        }
-        assert_eq!(depth, MAX_ITEM_DEPTH);
-        assert_eq!(reader.warnings.borrow().len(), 1);
+        with_room_for_the_deepest_nesting(|| {
+            let n = 3 * MAX_ITEM_DEPTH as u32;
+            let objects: Vec<_> = (1..=n)
+                .map(|u| group(u, &[u + 1][..(u < n) as usize]))
+                .collect();
+            let bytes = synthetic::image(&objects);
+            let db = synthetic::database(&bytes, &objects);
+            let reader = Reader::new(&db);
+            let mut item = reader.page_item(1, None).unwrap().unwrap();
+            let mut depth = 1;
+            while let Some(child) = item.children.pop() {
+                item = child;
+                depth += 1;
+            }
+            assert_eq!(depth, MAX_ITEM_DEPTH);
+            assert_eq!(reader.warnings.borrow().len(), 1);
+        });
     }
 
     #[test]

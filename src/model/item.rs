@@ -679,6 +679,24 @@ fn oval_anchors(path: &Path) -> bool {
     }
 }
 
+fn frame_text_orientation(matrix: [f64; 4]) -> Option<Orientation> {
+    // See docs/format/objects.md: unit coefficients can differ from 1 by
+    // floating-point roundoff. Do not accept meaningful scale or shear.
+    for (expected, orientation) in [
+        ([1.0, 0.0, 0.0, 1.0], Orientation::Horizontal),
+        ([0.0, 1.0, -1.0, 0.0], Orientation::Vertical),
+    ] {
+        if matrix
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| (*a - b).abs() <= 64.0 * f64::EPSILON)
+        {
+            return Some(orientation);
+        }
+    }
+    None
+}
+
 impl<'a> Reader<'a> {
     /// Text orientation of a multi-column frame (chunk 0x2DE): the
     /// identity gives horizontal text, the rotation 0 1 −1 0 vertical
@@ -692,11 +710,7 @@ impl<'a> Reader<'a> {
             return Ok(Some(None));
         }
         let Matrix([a, b, c, dd, _, _]) = Matrix::read(&mut self.cursor(&d))?;
-        Ok(Some(match [a, b, c, dd] {
-            [1.0, 0.0, 0.0, 1.0] => Some(Orientation::Horizontal),
-            [0.0, 1.0, -1.0, 0.0] => Some(Orientation::Vertical),
-            _ => None,
-        }))
+        Ok(Some(frame_text_orientation([a, b, c, dd])))
     }
 
     /// Text frame settings of frame `frame`, from its multi-column frame
@@ -2098,6 +2112,32 @@ mod eps_text_tests {
 mod tests {
     use super::*;
     use crate::object::Encoding;
+
+    #[test]
+    fn frame_orientation_tolerates_rounding_without_accepting_other_transforms() {
+        assert_eq!(
+            frame_text_orientation([1.0, 0.0, 0.0, 0.9999999999999929]),
+            Some(Orientation::Horizontal)
+        );
+        assert_eq!(
+            frame_text_orientation([1.0, 0.0, 0.0, 0.9999999999999964]),
+            Some(Orientation::Horizontal)
+        );
+        assert_eq!(
+            frame_text_orientation([0.0, 0.9999999999999964, -1.0, 0.0]),
+            Some(Orientation::Vertical)
+        );
+        for matrix in [
+            [1.0, 0.0, 0.0, 0.999999],
+            [1.0, 0.0, 0.0, 1.0 + 1e-12],
+            [1.0, 0.001, 0.0, 1.0],
+            [0.0, -1.0, 1.0, 0.0],
+            [f64::NAN, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, f64::INFINITY],
+        ] {
+            assert_eq!(frame_text_orientation(matrix), None);
+        }
+    }
 
     #[test]
     fn reads_the_first_alpha_channel() {

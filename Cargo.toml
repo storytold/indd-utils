@@ -8,3 +8,6 @@ repository = "https://github.com/storytold/indd-utils"
 publish = false
 
 [dependencies]
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; CONTRIBUTING.md).
+# std-only (no clock/wasmbind) so the wasm build stays byte-for-byte identical to native.
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }

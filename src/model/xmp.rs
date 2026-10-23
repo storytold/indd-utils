@@ -189,28 +189,72 @@ fn parse(s: &str) -> Option<XmpDate> {
 }
 
 /// Days since 1970-01-01 of a date in the proleptic Gregorian calendar.
+///
+/// `chrono`'s `NaiveDate` only reaches about year ±262143, but the Gregorian
+/// calendar repeats every 400 years (`DAYS_PER_400_YEARS`), so `chrono`
+/// converts the year within its cycle and the whole cycles are added back as
+/// days; the result matches the proleptic Gregorian count for every year, the
+/// way the former Howard-Hinnant arithmetic did. All the intermediates are
+/// `i128` so a near-`i64::MAX` year can't overflow; a count that then doesn't
+/// fit `i64` (no representable answer) reads as 0.
+///
+/// A day past the month's length (a malformed XMP date that `parse` lets
+/// through, e.g. "February 31") carries forward from the first of the month,
+/// exactly as the former arithmetic did (it was linear in the day).
 pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    use chrono::Datelike;
+    let (cycles, y400) = (i128::from(year.div_euclid(400)), year.rem_euclid(400));
+    // `y400` is 0..=399 and `month` 1..=12, so this is always in `chrono`'s range.
+    let base = i32::try_from(y400).ok().and_then(|y| {
+        u32::try_from(month)
+            .ok()
+            .and_then(|m| chrono::NaiveDate::from_ymd_opt(y, m, 1))
+    });
+    match base {
+        Some(first) => {
+            let days = i128::from(first.num_days_from_ce()) - i128::from(UNIX_EPOCH_DAYS_FROM_CE)
+                + cycles * i128::from(DAYS_PER_400_YEARS)
+                + i128::from(day)
+                - 1;
+            i64::try_from(days).unwrap_or(0)
+        }
+        None => 0,
+    }
 }
 
-/// The date (year, month, day) of a day count since 1970-01-01.
+/// `NaiveDate::num_days_from_ce` of 1970-01-01, so the count can be rebased
+/// onto the Unix epoch.
+const UNIX_EPOCH_DAYS_FROM_CE: i64 = 719_163;
+
+/// Days in one 400-year Gregorian cycle; the calendar repeats after it.
+const DAYS_PER_400_YEARS: i64 = 146_097;
+
+/// The date (year, month, day) of a day count since 1970-01-01, for any `i64`.
+///
+/// `chrono`'s `NaiveDate` only reaches about year ±262143, so `chrono` converts
+/// the day within its 400-year Gregorian cycle (`DAYS_PER_400_YEARS`) and the
+/// whole cycles are added back as years (an `i128` so `i64::MAX`/`MIN` can't
+/// overflow); the result matches the proleptic Gregorian date for every count,
+/// the way the former Howard-Hinnant arithmetic did.
 pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year, month, day)
+    use chrono::Datelike;
+    // CE day number of the date, in `i128` so no `days` overflows.
+    let from_ce = i128::from(days) + i128::from(UNIX_EPOCH_DAYS_FROM_CE);
+    let per_cycle = i128::from(DAYS_PER_400_YEARS);
+    let (cycles, rest) = (from_ce.div_euclid(per_cycle), from_ce.rem_euclid(per_cycle));
+    // `rest` is 0..146_097, a CE day inside years 0..=400, always in `chrono`'s range.
+    let date = i32::try_from(rest)
+        .ok()
+        .and_then(chrono::NaiveDate::from_num_days_from_ce_opt);
+    match date {
+        Some(d) => {
+            let year = i128::from(d.year()) + cycles * 400;
+            let year = i64::try_from(year).unwrap_or(if year < 0 { i64::MIN } else { i64::MAX });
+            (year, i64::from(d.month()), i64::from(d.day()))
+        }
+        // Unreachable: every `rest` in 0..146_097 is a valid CE day.
+        None => (1970, 1, 1),
+    }
 }
 
 /// The day of the year (0-based) of an instant, in UTC.
@@ -262,5 +306,29 @@ mod tests {
         assert_eq!(civil_from_days(days_from_civil(2024, 2, 29)), (2024, 2, 29));
         assert_eq!(civil_from_days(days_from_civil(1601, 1, 1)), (1601, 1, 1));
         assert_eq!(day_of_year(days_from_civil(2023, 12, 31) * 86_400), 364);
+        // Past chrono's own ±262143 date range the 400-year cycles carry the year, so accepted
+        // counts keep the dates the pre-chrono (Hinnant) arithmetic gave. Values from the old
+        // formula, in both directions and on both sides of the epoch.
+        for (days, date) in [
+            (95_026_602, (262_144, 1, 1)),
+            (108_853_222, (300_000, 1, 1)),
+            (100_000_000, (275_760, 9, 13)),
+            (-96_465_659, (-262_145, 12, 31)),
+            (-110_292_278, (-300_000, 1, 1)),
+            (-100_000_000, (-271_821, 4, 20)),
+        ] {
+            assert_eq!(civil_from_days(days), date, "{days}");
+            assert_eq!(days_from_civil(date.0, date.1, date.2), days, "{date:?}");
+        }
+        // The day still carries linearly past chrono's range (a malformed "February 31").
+        assert_eq!(
+            civil_from_days(days_from_civil(300_000, 2, 31)),
+            (300_000, 3, 2)
+        );
+        // 300000 is a leap year (divisible by 400), so 300000-12-31 is 0-based day 365.
+        assert_eq!(day_of_year(days_from_civil(300_000, 12, 31) * 86_400), 365);
+        // The i64 extremes stay exact (i128 intermediates) rather than panicking or clamping.
+        assert_eq!(civil_from_days(i64::MAX), (25_252_734_927_768_524, 7, 27));
+        assert_eq!(civil_from_days(i64::MIN), (-25_252_734_927_764_585, 6, 7));
     }
 }

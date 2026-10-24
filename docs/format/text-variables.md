@@ -45,6 +45,7 @@ chunk with it (their settings are all reproduced, below).
 | 0xCAAA | `MatchParagraphStyleType` | 135 | `MatchParagraphStylePreference` |
 | 0xCAAB | `ModificationDateType` | 135 | `DateVariablePreference` |
 | 0xCAAC | `CreationDateType` | 135 | `DateVariablePreference` |
+| 0xCAAD | `MatchCharacterStyleType` | 282 (privately held pairs, below) | `MatchCharacterStylePreference` |
 | 0xCAB5 | `XrefPageNumberType` | 135 | none |
 | 0xCAB6 | `XrefChapterNumberType` | 135 | none |
 | 0xCAC0 | `LiveCaptionType` | 130 | `CaptionMetadataVariablePreference` |
@@ -88,6 +89,20 @@ settings is a paragraph style UID. It differs between files, but in all
   0 or 1 except in 2 definitions, in files without IDML, where it is
   0x40. That may be a flag bit for this attribute; which one is open, so
   those definitions get no `DeleteEndPunctuation`.
+- Character style match (0xCAAD): the fields are those of the running
+  header. *b* is the character style UID, written as
+  `AppliedCharacterStyle`; *c* is `SearchStrategy`, 0 `FirstOnPage`,
+  1 `LastOnPage`; *a* is `ChangeCase`, 0 or 0xCAC9 `None`. The
+  `MatchCharacterStylePreference` element has the same attributes as
+  `MatchParagraphStylePreference` with `AppliedCharacterStyle` in place of
+  `AppliedParagraphStyle`. The type table above was drawn from the public
+  corpus and lacks this code. Over 282 pairs held privately (826
+  definitions), the converter's `TextVariable` element, including
+  its settings element, equals the reference IDML's in 282 of 282 pairs.
+  The values seen are `FirstOnPage`, `None`, `DeleteEndPunctuation="false"`
+  and an empty `TextBefore` and `TextAfter`; a variable with another
+  value in *a* or *c* has not been seen, so those mappings are those of
+  the running header and not independently proven.
 - Chapter number (0xCAA9): *a* is `Format`, 0 `Current`; 0x4C15
   `Arabic` (one definition, in a trustworthy pair).
 
@@ -156,6 +171,13 @@ In the corpus of 2026-10 two more kinds of instance show their text:
 
 - A running header on a master page shows `TextBefore`, `<`, the
   variable's name, `>` and `TextAfter`.
+- A character style match on a master page shows the same as a running
+  header there: `TextBefore`, `<`, the variable's name, `>` and
+  `TextAfter`. On a page, the instance shows the text found, or the
+  same placeholder when nothing matches; that depends on the layout, so
+  no `ResultText` is written for it. Over the 282 pairs above the
+  converter writes `ResultText` for 3,026 instances, all equal to the
+  reference, and leaves out 883 on pages, where the reference has one.
 - A chapter number in the `Current` format shows `TextBefore`, the
   document's chapter number (`ChapterNumberPreference`) and
   `TextAfter`.

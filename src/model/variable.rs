@@ -20,6 +20,7 @@ pub const TYPES: &[(u32, &str)] = &[
     (0xCAA9, "ChapterNumberType"),
     (0xCAAA, "MatchParagraphStyleType"),
     (0xCAAB, "ModificationDateType"),
+    (0xCAAD, "MatchCharacterStyleType"),
     (0xCAAC, "CreationDateType"),
     (0xCAB5, "XrefPageNumberType"),
     (0xCAB6, "XrefChapterNumberType"),
@@ -35,7 +36,8 @@ pub struct TextVariable {
     /// The date format of date variables; the contents of custom text
     /// variables (not proven, see the format notes).
     pub text: String,
-    /// Paragraph style of a running header (`MatchParagraphStyleType`).
+    /// Paragraph style of a running header (`MatchParagraphStyleType`), or
+    /// the character style a `MatchCharacterStyleType` variable follows.
     pub style: Option<u32>,
     /// The fields not identified hold the values every corpus sample of
     /// this type has, so the IDML settings are those of the samples.
@@ -112,7 +114,7 @@ fn parse(enc: Encoding, uid: u32, data: &[u8]) -> Result<TextVariable, Error> {
                 (zero(&rest[..4]) || enc.u32_at(rest, 0) == Some(0xCAB3)) && zero(&rest[4..])
             }
             0xCAC0 => enc.u32_at(rest, 0) == Some(0x8C64) && zero(&rest[4..]),
-            0xCAAA => {
+            0xCAAA | 0xCAAD => {
                 style = enc.u32_at(rest, 4);
 
                 zero(&rest[..4]) && zero(&rest[8..])
@@ -199,5 +201,21 @@ mod tests {
                 .unwrap()
                 .as_in_samples
         );
+    }
+
+    #[test]
+    fn reads_the_character_style_of_a_match_variable() {
+        let mut d = counted_text("Header");
+        d.extend(counted_text(""));
+        d.extend(0xCAADu32.to_le_bytes());
+        d.extend(0xCAC9u32.to_le_bytes());
+        d.extend(0x81u32.to_le_bytes());
+        // *c*, then the empty texts before and after.
+        d.extend([0; 12]);
+        let v = parse(crate::object::Encoding::default(), 0x8A, &d).unwrap();
+        assert_eq!(v.type_name(), Some("MatchCharacterStyleType"));
+        assert_eq!(v.style, Some(0x81));
+        let s = v.settings.unwrap();
+        assert_eq!((s.a, s.b, s.c), (0xCAC9, 0x81, 0));
     }
 }

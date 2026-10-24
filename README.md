@@ -73,6 +73,33 @@ The library also builds for WebAssembly (`wasm32-unknown-unknown`):
 `indd::convert` needs no file system or other host function, and gives
 the same package as a native build (`tools/check_wasm.sh`).
 
+### Natural Language Usage
+
+[`skills/indd-to-idml/SKILL.md`](skills/indd-to-idml/SKILL.md) teaches AI
+coding agents (Claude Code, Codex, Cursor, Gemini) how to check whether
+`indd` and the Rust toolchain (`rust-version` in [`Cargo.toml`](Cargo.toml))
+are already installed on macOS, Linux, or Windows, build `indd` only when
+needed, convert `.indd` and `.indt` files, verify the output zip, and
+report the saved `.idml` path.
+
+Convert a file directly from the skill URL:
+
+```text
+Use the indd-to-idml skill at https://github.com/storytold/indd-utils/tree/main/skills/indd-to-idml to convert "/path/to/brochure.indd" to IDML
+```
+
+Or install the skill for future sessions and convert in one step:
+
+```text
+Use the indd-to-idml skill at https://github.com/storytold/indd-utils/tree/main/skills/indd-to-idml to install the skill, then convert "/path/to/brochure.indd" to IDML
+```
+
+Once installed, ask in plain English:
+
+```text
+Convert "/path/to/brochure.indd" to IDML
+```
+
 
 ## Supported versions
 

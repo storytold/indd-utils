@@ -62,7 +62,7 @@ are in `big-endian.md`.
 | 0x1401 | UID list: master spreads |
 | 0x301 | UID list: layers (the first is an internal layer that holds pages) |
 | 0x313 | u32: active layer (IDML `ActiveLayer`) |
-| 0x222 | Two UID lists: the stories, then the XML backing story; IDML `StoryList` is both (`xml.md`) |
+| 0x222 | Two UID lists: the stories, then the XML backing story; IDML `StoryList` is both (`xml.md`). InDesign 2.0: one list of 6-byte records (below) |
 | 0x4C01 | UID list: sections |
 | 0xA443 | Document users: u32 count, then per user a flag byte, the name as an in-object string, u32 colour |
 | 0x1D8 | Save history: u32 count, then one record per session (below) |
@@ -77,6 +77,22 @@ label match (one differs, one has no chunk). The flag byte is 1 on 4
 keys in 4 pairs, all others 0; the 3 of these pairs whose IDML has a
 document label write the key without the `$ID/` prefix of built-in
 names.
+
+**The story list of InDesign 2.0.** In files from InDesign 2.0, chunk
+0x222 is a u32 count *n* and then *n* records of 6 bytes: a u32 UID and
+a u16 flag. Flag 2 marks the XML backing story (the story chunk 0xBF14
+names); the others have flag 1. There is no second list. Evidence: three
+privately held InDesign 2.0 documents with their print PDFs, which have
+no IDML (`CLEANROOM.md`, points a reviewer should know): the chunk is
+4 + 6*n* bytes in 3 of 3 (19, 30 and 37 records), every record names a
+story object (86 of 86) and the records name every story object of the
+file, flag 2 occurs once per file and names the story of chunk 0xBF14
+in 3 of 3. Read as a UID list, the chunk gives 10 of 30 stories in one
+of them, and the text of the others is missing from the output; read as
+records, 98 to 99 % of the words of each PDF are in the converted
+stories. A later file's two lists can have the same length (four
+stories and one backing story take 28 bytes, as four records do), so
+the converter reads records only in files from 2.0.
 
 **Script byte of the user names.** The second byte of each user name's
 in-object string (the byte after the string tag) is a script code: 0
@@ -305,6 +321,19 @@ trustworthy pairs:
 - `TabOrder` of pages: the list for the page in its spread's chunk 0x14580
   equals the IDML list for 9,367 of 9,367 pages (8 with a tab order);
   pages not in the chunk have an empty `TabOrder`.
+
+**Spreads without a transform.** No spread of three privately held
+InDesign 2.0 documents (19 spreads; `objects.md`, the story list of
+InDesign 2.0) has chunk 0x56E, so every spread would be written at the
+origin. IDML exported by InDesign stacks the spreads vertically: each
+spread's `ItemTransform` moves it down from the previous one by half of
+both spreads' page heights, plus 180 pt, plus the top and bottom bleed.
+Evidence: the two fixtures that store spread transforms, 6 of 6 steps
+(a 9.2 file with 1,000 pt pages and no bleed, step 1,180; a 7.5 file
+with 666 pt pages and a 9 pt bleed, step 846). When no spread of a
+document has chunk 0x56E, the converter places the spreads by this
+rule. Not known: the effect of a slug, or of a pasteboard other than
+the default (72 pt above and below).
 
 **Page transitions.** Chunk 0x2050C gives `PageTransitionType` and
 `PageTransitionDirection`. Over the 11,676 spreads of the distinct
@@ -1414,6 +1443,22 @@ chunk 0x3703 (44 bytes):
 | 8 | Four f64 offsets: left, top, right, bottom (IDML `TextWrapOffset`) |
 | 40 | u16 master page flag: 1 `ApplyToMasterPageOnly="false"`, 0 `true` |
 | 42 | u16 `TextWrapSide`: 0 `BothSides`, 1 `LeftSide`, 2 `RightSide`, 3 `SideTowardsSpine`, 4 `SideAwayFromSpine`, 5 `LargestArea` |
+
+**Text wrap of InDesign 2.0.** In files from InDesign 2.0 the chunk
+has 40 bytes: the fields up to offset 40 above, without the master
+page flag and the side. The converter reads them and writes
+`ApplyToMasterPageOnly="false"` and `BothSides`, the values of codes 1
+and 0. Evidence: three privately held 2.0 documents with their print
+PDFs (above, the story list of InDesign 2.0): 129 of 129 chunks are
+40 bytes (115 page items, 13 images, 1 group); the modes are 0 (89),
+3 (17) and 6 (23); each of the 40 items with mode 3 or 6 names a wrap
+path object (class 0x3702) whose chunk 0x3709 has 10 bytes and custom
+path flag 0 (40 of 40), so no path is written. In the PDFs, text keeps
+clear of these items: on the pages with mode 6 images and mode 3
+frames, the text beside them is set around them, and a justified
+paragraph's left edge steps right beside an image while its right edge
+stays flush. The converter took the 40-byte chunk for no chunk, and
+wrote every item of these documents with `TextWrapMode="None"`.
 
 **Wrap path.** Every item with wrap mode 1, 2, 3 or 6 (and the codes
 0x10003 and 0x10006) has a wrap path object; mode 0 items have none
@@ -2925,9 +2970,29 @@ no chunk 0x8CBC, and their chunk 0x8C1B (u32) names an object of class
 0x8C01. That object's chunk 0x8C2A names the image back in 759 of 762.
 No file of these versions has an IDML pair, so it is not known whether
 IDML would write the preview as `Contents`. The converter treats these
-images as linked graphics whose link it does not read: no `Contents`,
-and the preview goes to `Conversion::previews`. In files of later
-versions, 0x8C1B of such an image is 0 or absent in every case.
+images as linked graphics: no `Contents`, and the preview goes to
+`Conversion::previews`. It reads their link in files from 2.0 only
+(below); in files from 3.0 to 5.0 the link is not read. In files of
+later versions, 0x8C1B of such an image is 0 or absent in every case.
+
+**Links of InDesign 2.0.** In files from InDesign 2.0 the old link
+object (class 0x8C01) has chunks 0x8C04, 0x8C1B and 0x8C6B. Chunk
+0x8C04 holds the linked file's path as a flag byte and an in-object
+string (tag 1) at offset 24; chunk 0x8C1B names the object the link
+belongs to, an image or a story (placed text). Evidence: three
+privately held 2.0 documents (above, the story list of InDesign 2.0),
+51 of 51 old link objects: the same three chunks in 51, the string at
+24 parses in 51, every path starts with a drive letter (`C:\`). Of the
+51, 28 name an image in chunk 0x8C1B and 23 a story; each of the 28
+images names its link back in its own 0x8C1B (28 of 28), and the
+documents have no other images. The 16 bytes before the path are not
+identified. No IDML exists for these files; the converter writes the
+link of each image as IDML writes a graphic link (class 0x8C42,
+`StoredState="Normal"`), with the path as `LinkResourceURI` by the
+reverse of the `FilePath` rule (`file:`, `\` as `/`, percent-encoded;
+above, movies and sounds), and leaves `LinkResourceFormat`, the import
+stamp and the times out. Links of stories are not written. Not known:
+the form of a path saved on a Mac.
 
 Not known: why these images keep their file in the preview rather than
 in a raw data object named by 0x8C23. None of the 77 images whose 0x8C23
@@ -3544,6 +3609,20 @@ an in-object string, then, in newer files, a GUID string
 bytes), so the converter locates it as a flag byte followed by a valid
 in-object string.
 All 486 style names and 291 `NextStyle` values in the pairs match.
+
+**Style names in InDesign 2.0.** The name starts at offset 20: u16 kind
+at 16, u16 at 18, flag byte at 20, then an in-object string with tag 1
+(above, in-object strings) that ends the chunk. Evidence: three
+privately held 2.0 documents (above, the story list of InDesign 2.0),
+22 of 22 styles; the kind is 1 in 14 and 0 in 8, and the flag is 1 on
+the two root styles of each document (`[No paragraph style]`,
+`[No character style]`). The search for a flag byte and a string must
+accept tag 1 in these files. In the 6 root styles, bytes 15 to 19 (0, 1,
+0, 0, 0) also read as a flag byte and an empty tag-1 string; the search
+skips empty strings in 2.0 files, as a style name is never empty. Before
+this, every style of these documents was left out ("no name"), the
+paragraphs named styles that the IDML did not define, and the root
+style's font (the default of most text) was lost.
 
 **Imported and unique ID.** Over the 4,694 paragraph and character
 styles of the trustworthy pairs whose IDML style has the same name, the
@@ -4215,6 +4294,24 @@ converter writes these frames' `TextFramePreference` with those values:
 over the trustworthy pairs after 2026-10, 670 more elements, with no
 wrong or extra value (`FirstBaselineOffset` 2,731 of 2,731,
 `AutoSizingType` 16,202 of 16,202).
+
+**First baseline of InDesign 2.0.** Frames of InDesign 2.0 have a
+26-byte chunk 0x2CE. In three privately held 2.0 documents (above, the
+story list of InDesign 2.0) the u16 at 0 is 0 in 95 of 95 frames, but
+the first lines are not set as code 0 (`LeadingOffset`) sets them. In
+their print PDFs, the first baseline of the first frame of a story lies
+below the frame's top inset by the height of the font's `d`, which is
+what `AscentOffset` sets: over the 36 such frames whose font is embedded
+with a `d`, the offset divided by the point size equals the `d`'s top
+divided by the em in 27 (within 0.004; Times New Roman regular, italic
+and bold italic, Garamond bold and bold italic, Palatino) and is within
+0.015 in 4 more (Arial: 0.728, `d` 0.716). Five frames are further off
+and are not explained (very large type, a frame whose first line is not
+the first text). None is one leading (about 1.2 times the size) below
+the top. The converter writes `FirstBaselineOffset="AscentOffset"` for
+every 2.0 frame. With `LeadingOffset`, each frame's first line sat about
+6 pt too low, and short frames such as running heads could not hold
+their text.
 
 The frame itself (class 0x6201) holds the inset spacing in chunk 0x3723
 (44 bytes): f64, u32, then four f64 (left, top, right, bottom). IDML

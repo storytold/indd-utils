@@ -169,7 +169,13 @@ impl Writer<'_> {
         let mut x = Xml::new();
         x.pi(&format!(
             "aid style=\"50\" type=\"document\" readerVersion=\"6.0\" featureSet=\"257\" product=\"{}\" ",
-            self.dom
+            // Before 7.0, the product of an InDesign 7.0 export, with its
+            // build (`idml-values.md`, DOM version).
+            if self.doc.version.major < 7 {
+                "7.0(330)".to_string()
+            } else {
+                self.dom.clone()
+            }
         ));
         // The stories, then the backing story.
         let stories: Vec<String> = doc

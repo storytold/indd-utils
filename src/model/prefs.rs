@@ -1231,7 +1231,24 @@ impl Reader<'_> {
         // The layouts below are those of InDesign CS5 (7.0) and later in
         // little-endian files: the versions the corpus pairs show.
         if major < 7 || self.enc().big_endian() {
-            return Ok(Prefs::default());
+            // The preferences of these files are not read. Files from
+            // before 7.0 get the pasteboard of every IDML without chunk
+            // 0x5D2 (`preferences.md`, pasteboard).
+            let mut p = Prefs::default();
+            if self.enc().big_endian() && major >= 7 {
+                return Ok(p);
+            }
+            for (name, value) in [
+                ("PasteboardMargins", "-1 72"),
+                ("MinimumSpaceAboveAndBelow", "72"),
+            ] {
+                p.values.push(PrefValue {
+                    element: "PasteboardPreference",
+                    name,
+                    value: value.into(),
+                });
+            }
+            return Ok(p);
         }
         let Some(&(uid, _)) = self
             .db
@@ -2578,6 +2595,26 @@ impl Reader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_before_7_get_the_default_pasteboard() {
+        use crate::database::synthetic;
+        let objects = [(1, class::DOCUMENT, Vec::new())];
+        let bytes = synthetic::image(&objects);
+        let db = synthetic::database(&bytes, &objects);
+        let prefs = Reader::new(&db)
+            .prefs(crate::header::Version { major: 4, minor: 0 })
+            .unwrap();
+        let get = |name: &str| {
+            prefs
+                .values
+                .iter()
+                .find(|v| v.element == "PasteboardPreference" && v.name == name)
+                .map(|v| v.value.as_str())
+        };
+        assert_eq!(get("PasteboardMargins"), Some("-1 72"));
+        assert_eq!(get("MinimumSpaceAboveAndBelow"), Some("72"));
+    }
 
     #[test]
     fn reads_footnote_options() {

@@ -69,6 +69,12 @@ impl Encoding {
         self.string_tag
     }
 
+    /// Whether the file is from InDesign 2.0, whose layouts of some
+    /// chunks differ from those of later versions (`docs/format/`).
+    pub fn indesign_2(self) -> bool {
+        self.string_tag == 1
+    }
+
     /// A cursor over object data in this encoding.
     pub fn cursor(self, data: &[u8]) -> Cursor<'_> {
         Cursor {

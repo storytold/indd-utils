@@ -131,7 +131,7 @@ fn big_endian_fixtures_convert() {
         (
             "opf-neddy-flyer/Neddy_Flyer_HeatherRyan.indd",
             &[
-                "DOMVersion=\"3.0\"",
+                "DOMVersion=\"7.0\"",
                 "GeometricBounds=\"0 0 792 612\"",
                 "<Content>Ned the Narcoleptic</Content>",
                 "<Content>The Dream Job!</Content>",
@@ -144,7 +144,7 @@ fn big_endian_fixtures_convert() {
         (
             "xmp-toolkit-bluesquare/BlueSquare.indd",
             &[
-                "DOMVersion=\"4.0\"",
+                "DOMVersion=\"7.0\"",
                 "GeometricBounds=\"0 0 792 612\"",
                 "<Rectangle Self=\"uad\"",
                 "PostScriptName=\"Times-Roman\"",

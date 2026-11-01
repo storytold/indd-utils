@@ -1560,3 +1560,32 @@ string.
 whose family stands for a composite font is written as a reference to
 the composite font, except in character styles. See `fonts.md`,
 composite fonts as applied fonts.
+
+**Alignment in InDesign 2.0.** Files from InDesign 2.0 have no 0x1B7E.
+Paragraph styles and paragraph-style records have two attributes with
+the value type of 0x1B7E (0x1B20, a u16 code; 0x1B7E has this type in
+a 9.2 fixture): 0x1B05, the alignment (0 left, 1 center, 2 right, 3
+justified), and 0x1B04, the alignment of the last line. The root
+paragraph style has both (0 and 0); other styles and records have one or
+both, and inherit the other through `BasedOn`. Over the 82 records of
+three privately held 2.0 documents that set either (`objects.md`, the
+story list of InDesign 2.0), the pairs in effect (0x1B04, 0x1B05)
+are (0, 0) 16, (1, 1) 26, (2, 2) 11, (0, 3) 13, (1, 3) 6 and (2, 3) 10.
+They are mapped as (0, 0) `LeftAlign`, (1, 1) `CenterAlign`, (2, 2)
+`RightAlign`, (0, 3) `LeftJustified`, (1, 3) `CenterJustified` and (2,
+3) `RightJustified`. A seventh pair, (3, 3), occurs once, in a later
+2.0 document: a one-word paragraph whose word the PDF spreads over the
+frame's full width (letters from 86 to 514 pt in a frame from 86.1 to
+513.6), so its last line is justified too; it is mapped as
+`FullyJustified`. Whether 0x1B04 is the alignment of the last line or
+of the whole paragraph cannot be told from these pairs (they agree
+where 0x1B05 is below 3), so no other pair is mapped: the converter
+leaves it out with a warning. Evidence from the print PDFs, over the
+paragraphs of three lines or more whose PDF lines can be told apart:
+65 `LeftJustified` paragraphs are flush on both edges, 4 `CenterAlign`
+centred and 2 `LeftAlign` flush left; 17 more read otherwise only where
+the PDF text joins lines of two columns, or (one paragraph) where the
+left edge steps around a wrapped image. Short paragraphs agree: bylines
+with (2, 3) end at the frame's right edge, a short paragraph with (1,
+3) is centred in its column. Before this, 0x1B04 and 0x1B05 were not read and
+every paragraph of these documents was left aligned.

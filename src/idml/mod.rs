@@ -312,6 +312,12 @@ impl Edition {
 /// the save history, else by the header (`idml-values.md`, DOM version).
 /// Several releases keep the DOM version of an earlier one.
 fn dom_version(doc: &Document) -> String {
+    // IDML began with DOM 6.0, and the corpus has IDML from 7.0 on; a
+    // document from before 7.0 is written as 7.0 (`idml-values.md`, DOM
+    // version).
+    if doc.version.major < 7 {
+        return "7.0".to_string();
+    }
     let header = (doc.version.major, doc.version.minor);
     let (major, minor) = doc
         .last_session_version

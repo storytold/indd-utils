@@ -63,6 +63,31 @@ All 396 tables of the pairs (all versions) have it; 395 have 0 and are
 left to right in IDML, the one table with 1 (DOM 21.5) is right to left.
 IDML writes `TableDirection` on every table of every version.
 
+## Tables of InDesign 2.0
+
+Tables of InDesign 2.0 differ in three places. Evidence: the four tables
+of three privately held 2.0 documents with their print PDFs (`objects.md`,
+the story list of InDesign 2.0).
+
+- **Size (chunk 0xB608)** has 12 bytes: u32 rows, u32 columns, and one
+  more u32, 0 in all four tables; there is no fourth value. Rows and
+  columns match the tables of the PDFs (three of 4 by 4, one of 2 by 4).
+  As the third value is 0 in every table, it is not known whether it
+  counts header or footer rows; the converter reads it as header rows
+  and writes no footer rows.
+- **Row and column groups (chunks 0xB616, 0xB617)** end after each
+  group's attributes, without the 8 bytes that follow them in later
+  files: 8 of 8 chunks parse to their end that way, and none with the 8
+  bytes.
+- **Cell attribute sets** in the cell strand end after their attributes,
+  without the cell style priority and the cell style: the one table with
+  sets (4 sets in each of 2 groups) parses to the end of both groups
+  only that way. The converter writes these cells with no cell style
+  (`[None]`).
+
+Before this, every 2.0 table was left out ("chunk data ends"). Read
+this way, the text of each of the 56 cells is in the PDF (56 of 56).
+
 ## Cells
 
 The part of class 0xB606 owns a strand (chunk 0x261) whose run data

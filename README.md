@@ -47,6 +47,10 @@ cargo build --release
 
 INDT templates are read the same way as INDD files.
 
+To convert a whole folder, `tools/convert_folder.sh <in> <out>` builds
+the converter and writes one IDML per INDD or INDT file, with its
+warnings in `<name>.warnings.txt`.
+
 As a library:
 
 ```rust
@@ -79,6 +83,7 @@ the same package as a native build (`tools/check_wasm.sh`).
 | Versions | Distinct samples | State |
 |---|---:|---|
 | InDesign 1.x | 8 | Not supported (different container); reported as such. |
+| InDesign 2.0 | – | Convert, checked against the print PDFs of three privately held documents (no IDML pair exists). Image links are read from the old link objects; links of placed text are not written. Of the document preferences only the page setup is read; the page number style of sections and TOC styles are left out with warnings. Spreads are placed by the rule in [`objects.md`](docs/format/objects.md) (spreads without a transform). |
 | InDesign 3.0 and 4.0 | 67 | Convert. Some object layouts differ from later versions ([`big-endian.md`](docs/format/big-endian.md)). Document preferences, object style text frame settings, and the page number style (3.0) are left out with warnings. |
 | InDesign 5.0 and 6.0 | 181 | Convert. Document preferences are left out with a warning. |
 | InDesign 7.0–7.5 | 566 | Convert. Document preferences are left out with a warning. |

@@ -231,7 +231,11 @@ fn groups(
         c.u16()?;
         let na = c.u16()? as usize;
         let attrs = Attrs::parse_text(&mut c, na, List::Table, recorder)?;
-        c.skip(8)?;
+        // Groups of InDesign 2.0 end after their attributes (`tables.md`,
+        // tables of InDesign 2.0).
+        if !enc.indesign_2() {
+            c.skip(8)?;
+        }
         out.push((count, attrs));
     }
     Ok(out)
@@ -312,7 +316,13 @@ impl Reader<'_> {
         let nrows = c.u32()? as usize;
         let ncols = c.u32()? as usize;
         let header_rows = c.u32()?;
-        let footer_rows = c.u32()?;
+        // InDesign 2.0 stores 12 bytes, without the footer row count
+        // (`tables.md`, tables of InDesign 2.0).
+        let footer_rows = if size.len() == 12 && self.enc().indesign_2() {
+            0
+        } else {
+            c.u32()?
+        };
 
         let column_groups = match self.chunk(uid, chunk::TABLE_COLUMNS)? {
             Some(d) => groups(self.enc(), &d, self.db.recorder())?,
@@ -457,8 +467,13 @@ impl Reader<'_> {
                     } else {
                         Attrs::default()
                     };
-                    let style_priority = g.u32()?;
-                    let style = g.u32()?;
+                    // InDesign 2.0 sets have no cell style (`tables.md`,
+                    // tables of InDesign 2.0).
+                    let (style_priority, style) = if self.enc().indesign_2() {
+                        (0, 0)
+                    } else {
+                        (g.u32()?, g.u32()?)
+                    };
                     all_formats.push(CellFormat {
                         attrs,
                         style_priority,
@@ -1003,5 +1018,35 @@ mod tests {
             spans,
             [(1, 2, 2), (3, 1, 1), (4, 1, 1), (6, 1, 1), (5, 1, 2)]
         );
+    }
+}
+
+#[cfg(test)]
+mod indesign_2_tests {
+    use super::*;
+    use crate::header::{ByteOrder, Version};
+
+    #[test]
+    fn reads_the_row_groups_of_indesign_2() {
+        // One group of 4 rows: u32 count, u16 1, u16 one attribute (row
+        // height 0xB60C, a payload with one f64 value), and no trailer.
+        let mut d = 1u32.to_le_bytes().to_vec();
+        d.extend_from_slice(&4u32.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&0xB60Cu32.to_le_bytes());
+        d.extend_from_slice(&16u16.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&0xB61Du32.to_le_bytes());
+        d.extend_from_slice(&8u16.to_le_bytes());
+        d.extend_from_slice(&18.75f64.to_le_bytes());
+        assert_eq!(d.len(), 34);
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let g = groups(v2, &d, None).unwrap();
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].0, 4);
+        assert_eq!(f64_attr(&g[0].1, 0xB60C), Some(18.75));
+        // A later file expects 8 more bytes after the attributes.
+        assert!(groups(Encoding::default(), &d, None).is_err());
     }
 }

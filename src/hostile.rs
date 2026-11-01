@@ -4,7 +4,8 @@
 //! The inputs are damaged copies of two kinds of documents:
 //!
 //! - Synthetic databases, built from a seed with the test-only
-//!   [`synthetic`] builder. Their objects have the classes and chunks the
+//!   [`synthetic`] builder, in every encoding the model reads: InDesign
+//!   2.0 and later versions, little-endian and big-endian. Their objects have the classes and chunks the
 //!   model reads, with data shaped like UID lists, child lists, attribute
 //!   lists, strings and numbers, or random bytes. They go through the
 //!   model and the IDML writer.
@@ -352,7 +353,10 @@ type Objects = Vec<(u32, u32, Vec<u8>)>;
 /// classes they hold; spreads hold spread layers, which hold pages and
 /// page items. Every object also has chunks of any shape, and the
 /// objects outside this tree have any class.
-fn document(seed: u64, ids: &Ids) -> Objects {
+/// A synthetic document in `enc`: chunk headers, the document's UID lists
+/// and the layer names follow its byte order and string tag; the other data
+/// is little-endian, as damaged data may be.
+fn document(seed: u64, ids: &Ids, enc: crate::Encoding) -> Objects {
     let mut g = Gen {
         rng: Rng(seed),
         ids,
@@ -370,9 +374,9 @@ fn document(seed: u64, ids: &Ids) -> Objects {
             .collect()
     };
     let list = |uids: &[u32]| -> Vec<u8> {
-        let mut d = (uids.len() as u32).to_le_bytes().to_vec();
+        let mut d = enc.u32_bytes(uids.len() as u32).to_vec();
         uids.iter()
-            .for_each(|u| d.extend_from_slice(&u.to_le_bytes()));
+            .for_each(|&u| d.extend_from_slice(&enc.u32_bytes(u)));
         d
     };
     let mut doc = Vec::new();
@@ -388,6 +392,17 @@ fn document(seed: u64, ids: &Ids) -> Objects {
         let members = take(&mut g, n);
         for &uid in &members {
             classes[uid as usize - 2] = class;
+        }
+        if chunk == chunk::DOC_STORIES && enc.indesign_2() {
+            // InDesign 2.0: 6-byte records, a UID and a flag (1, or 2
+            // for the XML backing story).
+            let mut d = enc.u32_bytes(members.len() as u32).to_vec();
+            for &uid in &members {
+                d.extend_from_slice(&enc.u32_bytes(uid));
+                d.extend_from_slice(&enc.u16_bytes(1 + g.rng.below(2) as u16));
+            }
+            doc.push((chunk, d));
+            continue;
         }
         doc.push((chunk, list(&members)));
     }
@@ -428,23 +443,19 @@ fn document(seed: u64, ids: &Ids) -> Objects {
         let id = g.rng.pick(&ids.chunks);
         doc.push((id, g.chunk_data()));
     }
-    let mut objects = vec![(1, class::DOCUMENT, synthetic::chunks(&doc))];
+    let mut objects = vec![(1, class::DOCUMENT, synthetic::chunks_in(enc, &doc))];
     for ((uid, class), mut chunks) in (2..).zip(classes).zip(structure) {
         if class == class::LAYER {
             // Layers are read with the document, which fails without
             // their settings: two u16 flags, 14 bytes, then the name.
             let mut props = vec![0, 0, 1, 0];
             props.extend_from_slice(&g.numbers(14));
-            props.extend(synthetic::flagged_string(
-                crate::Encoding::default(),
-                0,
-                "Layer 1",
-            ));
+            props.extend(synthetic::flagged_string(enc, 0, "Layer 1"));
             let tail = 2 + g.rng.below(8);
             props.extend_from_slice(&g.numbers(tail));
             chunks.push((chunk::LAYER_PROPS, props));
         }
-        let mut data = synthetic::chunks(&chunks);
+        let mut data = synthetic::chunks_in(enc, &chunks);
         data.extend(g.object());
         data.truncate(crate::database::SEGMENT_MAX as usize);
         objects.push((uid, class, data));
@@ -481,7 +492,7 @@ type Running = Vec<Mutex<Option<(String, Instant)>>>;
 fn synthetic_cases(seed: u64, n: u64, ids: &Arc<Ids>) -> Vec<Case> {
     let doc_seed = seed ^ n.wrapping_mul(0xA24B_AED4_963E_E407);
     let mut rng = Rng(doc_seed ^ 0x5EED);
-    let versions = [3, 4, 5, 7, 9, 13, 16, 20, 21];
+    let versions = [2, 3, 4, 5, 7, 9, 13, 16, 20, 21];
     let mut cases: Vec<Case> = Vec::new();
     for k in 0..8 {
         let ids = Arc::clone(ids);
@@ -489,15 +500,24 @@ fn synthetic_cases(seed: u64, n: u64, ids: &Arc<Ids>) -> Vec<Case> {
             major: rng.pick(&versions),
             minor: 0,
         };
+        // Big-endian in a quarter of the cases of the versions the corpus
+        // has big-endian files of (3.0 to 13.x); the string tag follows
+        // the version (1 in 2.0 files).
+        let order = if version.major <= 13 && rng.below(4) == 0 {
+            crate::header::ByteOrder::Big
+        } else {
+            crate::header::ByteOrder::Little
+        };
+        let enc = crate::Encoding::new(order, version);
         let case_seed = rng.next();
         let what = format!(
-            "synthetic document {n} (seed {seed}), case {k}, version {}",
+            "synthetic document {n} (seed {seed}), case {k}, version {}, {order:?}",
             version.major
         );
         cases.push((
             what,
             Box::new(move || {
-                let mut objects = document(doc_seed, &ids);
+                let mut objects = document(doc_seed, &ids, enc);
                 let mut rng = Rng(case_seed);
                 match k {
                     // As built.
@@ -521,13 +541,13 @@ fn synthetic_cases(seed: u64, n: u64, ids: &Arc<Ids>) -> Vec<Case> {
                     _ => {
                         let mut bytes = synthetic::image(&objects);
                         bytes.truncate(rng.below(bytes.len() + 1));
-                        let db = synthetic::database(&bytes, &objects);
+                        let db = synthetic::database_in(&bytes, &objects, enc);
                         convert_database(&db, version);
                         return;
                     }
                 }
                 let bytes = synthetic::image(&objects);
-                let db = synthetic::database(&bytes, &objects);
+                let db = synthetic::database_in(&bytes, &objects, enc);
                 convert_database(&db, version);
             }),
         ));

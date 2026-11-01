@@ -1207,3 +1207,128 @@ mod justification_tests {
         assert_eq!(j(65), None);
     }
 }
+
+/// Synthetic databases in each encoding `synthetic::database_in` builds:
+/// little-endian InDesign 2.0, little-endian 3.0 and later, and
+/// big-endian. Damaged ones must fail with an error, never a panic.
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+    use crate::database::synthetic;
+    use crate::header::{ByteOrder, Version};
+
+    const V2: Version = Version { major: 2, minor: 0 };
+    const V4: Version = Version { major: 4, minor: 0 };
+
+    fn encodings() -> [(Encoding, &'static str); 3] {
+        [
+            (Encoding::new(ByteOrder::Little, V2), "little-endian 2.0"),
+            (Encoding::new(ByteOrder::Little, V4), "little-endian 4.0"),
+            (Encoding::new(ByteOrder::Big, V4), "big-endian 4.0"),
+        ]
+    }
+
+    /// A u32 count and values, in `enc`'s byte order.
+    fn list(enc: Encoding, uids: &[u32]) -> Vec<u8> {
+        let mut d = enc.u32_bytes(uids.len() as u32).to_vec();
+        uids.iter()
+            .for_each(|&u| d.extend_from_slice(&enc.u32_bytes(u)));
+        d
+    }
+
+    /// The story list as each encoding stores it: 6-byte records with a
+    /// backing story (flag 2) in 2.0 files, a UID list otherwise.
+    fn story_list(enc: Encoding, stories: &[u32]) -> Vec<u8> {
+        if !enc.indesign_2() {
+            return list(enc, stories);
+        }
+        let mut d = enc.u32_bytes(stories.len() as u32 + 1).to_vec();
+        for (uid, flag) in [(9u32, 2u16)]
+            .into_iter()
+            .chain(stories.iter().map(|&u| (u, 1)))
+        {
+            d.extend_from_slice(&enc.u32_bytes(uid));
+            d.extend_from_slice(&enc.u16_bytes(flag));
+        }
+        d
+    }
+
+    fn document(enc: Encoding) -> Vec<(u32, u32, Vec<u8>)> {
+        let doc = synthetic::chunks_in(
+            enc,
+            &[
+                (chunk::DOC_SPREADS, list(enc, &[])),
+                (chunk::DOC_STORIES, story_list(enc, &[5, 6])),
+            ],
+        );
+        vec![
+            (DOC, class::DOCUMENT, doc),
+            (5, class::STORY, Vec::new()),
+            (6, class::STORY, Vec::new()),
+        ]
+    }
+
+    #[test]
+    fn reads_synthetic_databases_in_each_encoding() {
+        for (enc, what) in encodings() {
+            let objects = document(enc);
+            let bytes = synthetic::image(&objects);
+            let db = synthetic::database_in(&bytes, &objects, enc);
+            let reader = Reader::new(&db);
+            assert_eq!(reader.story_list().unwrap(), [5, 6], "{what}");
+            assert_eq!(
+                reader.uid_list(DOC, chunk::DOC_SPREADS).unwrap(),
+                Vec::<u32>::new(),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_databases_fail_without_panicking() {
+        for (enc, what) in encodings() {
+            let objects = document(enc);
+            let full = synthetic::image(&objects);
+            // Every cut, from an empty file to one byte short, at a step
+            // that reaches into each object's page.
+            for cut in (0..full.len()).step_by(61) {
+                let bytes = &full[..cut];
+                let db = synthetic::database_in(bytes, &objects, enc);
+                let version = if enc.indesign_2() { V2 } else { V4 };
+                // An error or a document; a panic fails the test.
+                let result = Reader::new(&db).document(version);
+                if cut < crate::container::PAGE_SIZE {
+                    assert!(result.is_err(), "{what}, cut at {cut}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chunks_running_past_their_object_are_not_read() {
+        for (enc, what) in encodings() {
+            // A story list whose header claims 1,000 bytes, with only the
+            // list (8 to 16 bytes) after it: the object's chunks cannot be
+            // read.
+            let mut doc = enc.u32_bytes(chunk::DOC_STORIES).to_vec();
+            doc.extend_from_slice(&enc.u32_bytes(1000));
+            doc.extend(story_list(enc, &[5]));
+            let objects = vec![(DOC, class::DOCUMENT, doc), (5, class::STORY, Vec::new())];
+            let bytes = synthetic::image(&objects);
+            let db = synthetic::database_in(&bytes, &objects, enc);
+            let reader = Reader::new(&db);
+            assert_eq!(
+                reader.chunk(DOC, chunk::DOC_STORIES).unwrap(),
+                None,
+                "{what}"
+            );
+            assert_eq!(reader.story_list().unwrap(), Vec::<u32>::new(), "{what}");
+            let version = if enc.indesign_2() { V2 } else { V4 };
+            // The document is read without its stories, or fails; it does
+            // not panic.
+            if let Ok(d) = reader.document(version) {
+                assert!(d.stories.is_empty(), "{what}");
+            }
+        }
+    }
+}

@@ -466,6 +466,18 @@ pub(crate) mod synthetic {
         out
     }
 
+    /// Object bytes made of chunks (ID, data), with the chunk headers in
+    /// `encoding`'s byte order (`docs/format/big-endian.md`).
+    pub fn chunks_in(encoding: Encoding, chunks: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (id, data) in chunks {
+            out.extend_from_slice(&encoding.u32_bytes(*id));
+            out.extend_from_slice(&encoding.u32_bytes(data.len() as u32));
+            out.extend_from_slice(data);
+        }
+        out
+    }
+
     /// Object bytes made of chunks (ID, data).
     pub fn chunks(chunks: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let mut out = Vec::new();

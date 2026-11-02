@@ -610,6 +610,20 @@ impl BaselineGrid {
     }
 }
 
+/// What the hierarchy of a page item lists: the items it contains and
+/// its other parts.
+#[derive(Default)]
+struct ItemParts {
+    children: Vec<PageItem>,
+    graphics: Vec<Graphic>,
+    media: Vec<Media>,
+    /// The frame column of the item's multi-column frame.
+    text_column: Option<u32>,
+    frame_prefs: Option<TextFramePreferences>,
+    /// The item's multi-column frame.
+    frame_mcf: Option<u32>,
+}
+
 /// Groups nested deeper than this are left out, with a warning, so that a
 /// damaged file cannot exhaust the stack.
 pub(super) const MAX_ITEM_DEPTH: usize = 100;
@@ -1083,50 +1097,84 @@ impl<'a> Reader<'a> {
         uid: u32,
         layer: Option<u32>,
     ) -> Result<Option<PageItem>, Error> {
+        let mut out = Vec::new();
+        self.push_page_item(uid, layer, &mut out);
+        Ok(out.pop())
+    }
+
+    /// Adds page item `uid`, with the items it contains, to `out`, or
+    /// leaves it out as [`Reader::page_item`] does.
+    ///
+    /// This function and [`Reader::page_item_contents`] recurse once per
+    /// nesting level, so they keep their frames small: an item is pushed
+    /// to its parent's list rather than returned, which would move it
+    /// through several temporaries at every level, and an item's own
+    /// settings are read in functions that are never inlined into them.
+    /// Returning items needed 3 to 4 MiB of stack in a debug build to
+    /// reach [`MAX_ITEM_DEPTH`]; this needs less than 0.5 MiB.
+    fn push_page_item(&self, uid: u32, layer: Option<u32>, out: &mut Vec<PageItem>) {
         let cls = self.class(uid);
         if cls != Some(class::SPLINE_ITEM)
             && cls != Some(class::GROUP)
             && cls != Some(class::EPS_TEXT)
             && FormKind::of(cls).is_none()
         {
-            return Ok(None);
+            return;
         }
         {
             let path = self.item_path.borrow();
             if path.contains(&uid) {
                 drop(path);
                 self.warn(format!("item {uid} contains itself; left out"));
-                return Ok(None);
+                return;
             }
             if path.len() >= MAX_ITEM_DEPTH {
                 drop(path);
                 self.warn(format!(
                     "item {uid} is nested more than {MAX_ITEM_DEPTH} deep; left out"
                 ));
-                return Ok(None);
+                return;
             }
         }
         self.item_path.borrow_mut().push(uid);
-        let item = self.page_item_contents(uid, cls, layer);
+        let read = self.page_item_contents(uid, cls, layer, out);
         self.item_path.borrow_mut().pop();
         // An item that cannot be read is left out, like other objects.
-        Ok(item.unwrap_or_else(|e| {
+        if let Err(e) = read {
             self.warn(format!("item {uid} left out: {e}"));
-            None
-        }))
+        }
     }
 
-    pub(super) fn page_item_contents(
+    /// Adds page item `uid`, with the items it contains, to `out`.
+    fn page_item_contents(
         &self,
         uid: u32,
         cls: Option<u32>,
         layer: Option<u32>,
-    ) -> Result<Option<PageItem>, Error> {
-        let form = FormKind::of(cls);
-        let states = form.is_some_and(FormKind::has_states);
-        // Groups without chunk 0x151 have their transform in chunk 0x40D,
-        // form fields with states in chunk 0x14527.
-        let transform = match self.chunk(uid, chunk::ITEM_TRANSFORM)? {
+        out: &mut Vec<PageItem>,
+    ) -> Result<(), Error> {
+        let states = FormKind::of(cls).is_some_and(FormKind::has_states);
+        let transform = self.item_transform(uid, cls, states)?;
+        let child_uids = if states {
+            Vec::new()
+        } else {
+            self.children(uid, chunk::ITEM_HIERARCHY)?
+        };
+        let mut parts = ItemParts::default();
+        for &child in &child_uids {
+            if !self.item_part(uid, child, &mut parts)? {
+                self.push_page_item(child, layer, &mut parts.children);
+            }
+        }
+        self.finish_page_item(uid, cls, layer, transform, parts, out)
+    }
+
+    /// The transform of page item `uid`. Groups without chunk 0x151 have
+    /// their transform in chunk 0x40D, form fields with states in chunk
+    /// 0x14527.
+    #[inline(never)]
+    fn item_transform(&self, uid: u32, cls: Option<u32>, states: bool) -> Result<Matrix, Error> {
+        Ok(match self.chunk(uid, chunk::ITEM_TRANSFORM)? {
             Some(d) => Matrix::read(&mut self.cursor(&d))?,
             None => {
                 let other = if states {
@@ -1141,34 +1189,53 @@ impl<'a> Reader<'a> {
                     _ => Matrix::IDENTITY,
                 }
             }
-        };
-        let child_uids = if states {
-            Vec::new()
+        })
+    }
+
+    /// Adds `child` of page item `uid` to `parts` if it is a graphic, a
+    /// media object or a multi-column frame. `false` if it is none of
+    /// these, so it may be a page item.
+    #[inline(never)]
+    fn item_part(&self, uid: u32, child: u32, parts: &mut ItemParts) -> Result<bool, Error> {
+        if let Some(g) = self.graphic(child)? {
+            parts.graphics.push(g);
+        } else if let Some(m) = self.media(child)? {
+            parts.media.push(m);
+        } else if self.class(child) == Some(class::MULTI_COLUMN_FRAME) {
+            parts.frame_prefs = self.text_frame_preferences(uid, child)?;
+            parts.frame_mcf = Some(child);
+            parts.text_column = self
+                .children(child, chunk::ITEM_HIERARCHY)?
+                .into_iter()
+                .find(|&c| self.class(c) == Some(class::FRAME_COLUMN));
         } else {
-            self.children(uid, chunk::ITEM_HIERARCHY)?
-        };
-        let mut children = Vec::new();
-        let mut graphics = Vec::new();
-        let mut media = Vec::new();
-        let mut text_column = None;
-        let mut frame_prefs = None;
-        let mut frame_mcf = None;
-        for &child in &child_uids {
-            if let Some(g) = self.graphic(child)? {
-                graphics.push(g);
-            } else if let Some(m) = self.media(child)? {
-                media.push(m);
-            } else if self.class(child) == Some(class::MULTI_COLUMN_FRAME) {
-                frame_prefs = self.text_frame_preferences(uid, child)?;
-                frame_mcf = Some(child);
-                text_column = self
-                    .children(child, chunk::ITEM_HIERARCHY)?
-                    .into_iter()
-                    .find(|&c| self.class(c) == Some(class::FRAME_COLUMN));
-            } else if let Some(item) = self.page_item(child, layer)? {
-                children.push(item);
-            }
+            return Ok(false);
         }
+        Ok(true)
+    }
+
+    /// Adds page item `uid` to `out`, from its transform and the parts its
+    /// hierarchy lists, with the settings of its own chunks.
+    #[inline(never)]
+    fn finish_page_item(
+        &self,
+        uid: u32,
+        cls: Option<u32>,
+        layer: Option<u32>,
+        transform: Matrix,
+        parts: ItemParts,
+        out: &mut Vec<PageItem>,
+    ) -> Result<(), Error> {
+        let ItemParts {
+            children,
+            graphics,
+            media,
+            text_column,
+            frame_prefs,
+            frame_mcf,
+        } = parts;
+        let form = FormKind::of(cls);
+        let states = form.is_some_and(FormKind::has_states);
         let paths = self.paths(uid)?;
         let attrs = match self.chunk(uid, chunk::ITEM_ATTRS)? {
             Some(d) => self
@@ -1223,7 +1290,7 @@ impl<'a> Reader<'a> {
                 .and_then(|d| Some((self.enc().u16_at(&d, 0)?, self.enc().u32_at(&d, 2)?)));
             ItemKind::Shape(classify(&paths, shape))
         };
-        Ok(Some(PageItem {
+        out.push(PageItem {
             uid,
             graphics,
             media,
@@ -1266,7 +1333,8 @@ impl<'a> Reader<'a> {
             } else {
                 None
             },
-        }))
+        });
+        Ok(())
     }
 
     /// The states of a form field (chunks 0x14521 and 0x14526) with the
@@ -1316,23 +1384,23 @@ impl<'a> Reader<'a> {
                 .filter(|(k, _)| *k == u32::from(key))
                 .flat_map(|(_, l)| l)
             {
-                if let Some(mut item) = self.page_item(child, layer)? {
-                    // A state's group without a name of its own has the
-                    // name of its state type.
-                    if item.kind == ItemKind::Group
-                        && item
-                            .props
-                            .name
-                            .as_ref()
-                            .is_none_or(|n| n.builtin && n.name.is_empty())
-                        && let Some(name) = state_group_name(kind, id)
-                    {
-                        item.props.name = Some(ItemName {
-                            builtin: true,
-                            name: name.into(),
-                        });
-                    }
-                    items.push(item);
+                let at = items.len();
+                self.push_page_item(child, layer, &mut items);
+                // A state's group without a name of its own has the name
+                // of its state type.
+                if let Some(item) = items.get_mut(at)
+                    && item.kind == ItemKind::Group
+                    && item
+                        .props
+                        .name
+                        .as_ref()
+                        .is_none_or(|n| n.builtin && n.name.is_empty())
+                    && let Some(name) = state_group_name(kind, id)
+                {
+                    item.props.name = Some(ItemName {
+                        builtin: true,
+                        name: name.into(),
+                    });
                 }
             }
             out.push(FormState {

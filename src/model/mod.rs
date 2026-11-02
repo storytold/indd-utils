@@ -136,21 +136,31 @@ mod tests {
 
     #[test]
     fn deeply_nested_groups_are_left_out() {
-        let n = 3 * MAX_ITEM_DEPTH as u32;
-        let objects: Vec<_> = (1..=n)
-            .map(|u| group(u, &[u + 1][..(u < n) as usize]))
-            .collect();
-        let bytes = synthetic::image(&objects);
-        let db = synthetic::database(&bytes, &objects);
-        let reader = Reader::new(&db);
-        let mut item = reader.page_item(1, None).unwrap().unwrap();
-        let mut depth = 1;
-        while let Some(child) = item.children.pop() {
-            item = child;
-            depth += 1;
-        }
-        assert_eq!(depth, MAX_ITEM_DEPTH);
-        assert_eq!(reader.warnings.borrow().len(), 1);
+        // On a thread with half the default stack, so that the test fails
+        // if reading items nested to the cap stops fitting in a thread's
+        // stack, in a debug build too.
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let n = 3 * MAX_ITEM_DEPTH as u32;
+                let objects: Vec<_> = (1..=n)
+                    .map(|u| group(u, &[u + 1][..(u < n) as usize]))
+                    .collect();
+                let bytes = synthetic::image(&objects);
+                let db = synthetic::database(&bytes, &objects);
+                let reader = Reader::new(&db);
+                let mut item = reader.page_item(1, None).unwrap().unwrap();
+                let mut depth = 1;
+                while let Some(child) = item.children.pop() {
+                    item = child;
+                    depth += 1;
+                }
+                assert_eq!(depth, MAX_ITEM_DEPTH);
+                assert_eq!(reader.warnings.borrow().len(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

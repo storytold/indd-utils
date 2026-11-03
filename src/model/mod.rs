@@ -136,21 +136,85 @@ mod tests {
 
     #[test]
     fn deeply_nested_groups_are_left_out() {
-        let n = 3 * MAX_ITEM_DEPTH as u32;
-        let objects: Vec<_> = (1..=n)
-            .map(|u| group(u, &[u + 1][..(u < n) as usize]))
-            .collect();
-        let bytes = synthetic::image(&objects);
-        let db = synthetic::database(&bytes, &objects);
-        let reader = Reader::new(&db);
-        let mut item = reader.page_item(1, None).unwrap().unwrap();
-        let mut depth = 1;
-        while let Some(child) = item.children.pop() {
-            item = child;
-            depth += 1;
-        }
-        assert_eq!(depth, MAX_ITEM_DEPTH);
-        assert_eq!(reader.warnings.borrow().len(), 1);
+        // On a thread with half the default stack, so that the test fails
+        // if reading items nested to the cap stops fitting in a thread's
+        // stack, in a debug build too.
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let n = 3 * MAX_ITEM_DEPTH as u32;
+                let objects: Vec<_> = (1..=n)
+                    .map(|u| group(u, &[u + 1][..(u < n) as usize]))
+                    .collect();
+                let bytes = synthetic::image(&objects);
+                let db = synthetic::database(&bytes, &objects);
+                let reader = Reader::new(&db);
+                let mut item = reader.page_item(1, None).unwrap().unwrap();
+                let mut depth = 1;
+                while let Some(child) = item.children.pop() {
+                    item = child;
+                    depth += 1;
+                }
+                assert_eq!(depth, MAX_ITEM_DEPTH);
+                assert_eq!(reader.warnings.borrow().len(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn deeply_nested_form_fields_are_left_out() {
+        // Each button's one state shows the next button. The items of a
+        // state are read on another path than the children of a group,
+        // so this checks that path's stack use in the same way.
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let le = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+                let n = 3 * MAX_ITEM_DEPTH as u32;
+                let objects: Vec<_> = (1..=n)
+                    .map(|u| {
+                        // Active state 0; state 0, enabled, with key 1.
+                        let mut states = le(&[0, 1, 0]);
+                        states.extend([1, 0, 1, 0, 0, 0]);
+                        // Key 1 shows the next button.
+                        let next = &[u + 1][..(u < n) as usize];
+                        let mut items = le(&[0, 0, 1, 1, next.len() as u32]);
+                        items.extend(le(next));
+                        let chunks = synthetic::chunks(&[
+                            (chunk::FORM_STATES, states),
+                            (chunk::FORM_STATE_ITEMS, items),
+                        ]);
+                        (u, class::BUTTON, chunks)
+                    })
+                    .collect();
+                let bytes = synthetic::image(&objects);
+                let db = synthetic::database(&bytes, &objects);
+                let reader = Reader::new(&db);
+                let mut item = reader.page_item(1, None).unwrap().unwrap();
+                let mut depth = 1;
+                loop {
+                    let ItemKind::Form(f) = item.kind else {
+                        panic!("{:?}", item.kind)
+                    };
+                    let Some(child) = f
+                        .states
+                        .into_iter()
+                        .next()
+                        .and_then(|s| s.items.into_iter().next())
+                    else {
+                        break;
+                    };
+                    item = child;
+                    depth += 1;
+                }
+                assert_eq!(depth, MAX_ITEM_DEPTH);
+                assert_eq!(reader.warnings.borrow().len(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

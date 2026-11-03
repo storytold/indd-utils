@@ -610,8 +610,9 @@ impl BaselineGrid {
     }
 }
 
-/// What the hierarchy of a page item lists: the items it contains and
-/// its other parts.
+/// What is read of a page item before its other settings, in this order:
+/// what its hierarchy lists (the items it contains and its other parts),
+/// its paths, attributes and object style, and a form field's states.
 #[derive(Default)]
 struct ItemParts {
     children: Vec<PageItem>,
@@ -622,6 +623,10 @@ struct ItemParts {
     frame_prefs: Option<TextFramePreferences>,
     /// The item's multi-column frame.
     frame_mcf: Option<u32>,
+    paths: Vec<Path>,
+    attrs: Attrs,
+    object_style: Option<u32>,
+    states: Vec<FormState>,
 }
 
 /// Groups nested deeper than this are left out, with a warning, so that a
@@ -1153,7 +1158,8 @@ impl<'a> Reader<'a> {
         layer: Option<u32>,
         out: &mut Vec<PageItem>,
     ) -> Result<(), Error> {
-        let states = FormKind::of(cls).is_some_and(FormKind::has_states);
+        let form = FormKind::of(cls);
+        let states = form.is_some_and(FormKind::has_states);
         let transform = self.item_transform(uid, cls, states)?;
         let child_uids = if states {
             Vec::new()
@@ -1165,6 +1171,12 @@ impl<'a> Reader<'a> {
             if !self.item_part(uid, child, &mut parts)? {
                 self.push_page_item(child, layer, &mut parts.children);
             }
+        }
+        self.item_paths_and_attrs(uid, &mut parts)?;
+        // The states hold items too, so they are read in this frame rather
+        // than in `finish_page_item`, whose frame is large.
+        if states && let Some(kind) = form {
+            parts.states = self.form_states(uid, kind, layer)?;
         }
         self.finish_page_item(uid, cls, layer, transform, parts, out)
     }
@@ -1214,8 +1226,29 @@ impl<'a> Reader<'a> {
         Ok(true)
     }
 
-    /// Adds page item `uid` to `out`, from its transform and the parts its
-    /// hierarchy lists, with the settings of its own chunks.
+    /// Reads the paths, attributes and object style of page item `uid`
+    /// into `parts`.
+    #[inline(never)]
+    fn item_paths_and_attrs(&self, uid: u32, parts: &mut ItemParts) -> Result<(), Error> {
+        parts.paths = self.paths(uid)?;
+        parts.attrs = match self.chunk(uid, chunk::ITEM_ATTRS)? {
+            Some(d) => self
+                .attrs_or_warn(
+                    || format!("item {uid}"),
+                    Attrs::parse(self.enc(), &d, List::Item, self.db.recorder()),
+                )
+                .unwrap_or_default(),
+            None => Attrs::default(),
+        };
+        parts.object_style = match self.chunk(uid, chunk::ITEM_OBJECT_STYLE)? {
+            Some(d) => uid_or_none(self.cursor(&d).u32()?),
+            None => None,
+        };
+        Ok(())
+    }
+
+    /// Adds page item `uid` to `out`, from its transform and the parts read
+    /// before, with the other settings of its own chunks.
     #[inline(never)]
     fn finish_page_item(
         &self,
@@ -1233,29 +1266,12 @@ impl<'a> Reader<'a> {
             text_column,
             frame_prefs,
             frame_mcf,
+            paths,
+            attrs,
+            object_style,
+            states,
         } = parts;
-        let form = FormKind::of(cls);
-        let states = form.is_some_and(FormKind::has_states);
-        let paths = self.paths(uid)?;
-        let attrs = match self.chunk(uid, chunk::ITEM_ATTRS)? {
-            Some(d) => self
-                .attrs_or_warn(
-                    || format!("item {uid}"),
-                    Attrs::parse(self.enc(), &d, List::Item, self.db.recorder()),
-                )
-                .unwrap_or_default(),
-            None => Attrs::default(),
-        };
-        let object_style = match self.chunk(uid, chunk::ITEM_OBJECT_STYLE)? {
-            Some(d) => uid_or_none(self.cursor(&d).u32()?),
-            None => None,
-        };
-        let kind = if let Some(kind) = form {
-            let states = if states {
-                self.form_states(uid, kind, layer)?
-            } else {
-                Vec::new()
-            };
+        let kind = if let Some(kind) = FormKind::of(cls) {
             let mut f = form_field(kind, states, &attrs, &children);
             if kind == FormKind::Button {
                 f.timing = self.timing(uid, chunk::BUTTON_TIMING);

@@ -144,9 +144,14 @@ mod tests {
     /// whole run, and `cargo test` then hung instead of exiting; `tools/check.py`
     /// never saw it because it tests `--release`, where the frames are far
     /// smaller (#7).
+    ///
+    /// Measured with a probe in `page_item` at the deepest level: 3,723 KiB in a
+    /// debug build and 731 KiB in release. The thread gets 16 MiB, four times
+    /// the debug figure, because instrumented builds (coverage) have larger
+    /// frames still; the size reserves address space, not memory.
     fn with_room_for_the_deepest_nesting(f: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
+            .stack_size(16 * 1024 * 1024)
             .spawn(f)
             .expect("spawn a thread for the deep-nesting reader")
             .join()

@@ -391,6 +391,16 @@ pub(crate) mod synthetic {
     /// The database of an image made by [`image`] from the same objects
     /// (UID, class, chunk bytes).
     pub fn database<'a>(bytes: &'a [u8], objects: &[(u32, u32, Vec<u8>)]) -> Database<'a> {
+        database_in(bytes, objects, Encoding::default())
+    }
+
+    /// Like [`database`], for a file of `encoding` (for example one from
+    /// InDesign 2.0).
+    pub fn database_in<'a>(
+        bytes: &'a [u8],
+        objects: &[(u32, u32, Vec<u8>)],
+        encoding: Encoding,
+    ) -> Database<'a> {
         let mut entries: Vec<Entry> = objects
             .iter()
             .enumerate()
@@ -410,7 +420,7 @@ pub(crate) mod synthetic {
             entries,
             classes,
             unclassed: Vec::new(),
-            encoding: Encoding::default(),
+            encoding,
             recorder: None,
         }
     }
@@ -452,6 +462,18 @@ pub(crate) mod synthetic {
         if !s.is_empty() {
             out.extend_from_slice(&encoding.u16_bytes(0x4000 | s.len() as u16));
             out.extend_from_slice(s.as_bytes());
+        }
+        out
+    }
+
+    /// Object bytes made of chunks (ID, data), with the chunk headers in
+    /// `encoding`'s byte order (`docs/format/big-endian.md`).
+    pub fn chunks_in(encoding: Encoding, chunks: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (id, data) in chunks {
+            out.extend_from_slice(&encoding.u32_bytes(*id));
+            out.extend_from_slice(&encoding.u32_bytes(data.len() as u32));
+            out.extend_from_slice(data);
         }
         out
     }

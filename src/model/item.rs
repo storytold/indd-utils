@@ -373,6 +373,26 @@ pub struct Link {
     pub format: Option<String>,
 }
 
+/// The `LinkResourceURI` of a Windows path with a drive letter
+/// (`C:\dir\a b.tif` gives `file:C:/dir/a%20b.tif`): the reverse of the
+/// rule from link URI to native path (`objects.md`, `FilePath`). `None`
+/// for any other path.
+pub(super) fn windows_file_uri(path: &str) -> Option<String> {
+    let b = path.as_bytes();
+    if b.len() < 3 || !b[0].is_ascii_alphabetic() || b[1] != b':' || b[2] != b'\\' {
+        return None;
+    }
+    let mut uri = String::from("file:");
+    for &c in path.replace('\\', "/").as_bytes() {
+        if c.is_ascii_alphanumeric() || b"-._~/:".contains(&c) {
+            uri.push(c as char);
+        } else {
+            uri.push_str(&format!("%{c:02X}"));
+        }
+    }
+    Some(uri)
+}
+
 /// The bytes of a file stored in the document, if there is one.
 pub(super) type EmbeddedFile = Option<Vec<u8>>;
 
@@ -770,7 +790,14 @@ impl<'a> Reader<'a> {
             column_count: self.cursor(&cols).u32()?,
             column_gutter: self.cursor(&cols[4..]).f64()?,
             column_fixed_width: self.cursor(&cols[14..]).f64()?,
-            first_baseline_offset: self.cursor(&just).u16()?,
+            // InDesign 2.0 frames set the first baseline as `AscentOffset`
+            // does, whatever the u16 at 0 (`objects.md`, first baseline of
+            // InDesign 2.0).
+            first_baseline_offset: if self.enc().indesign_2() {
+                1
+            } else {
+                self.cursor(&just).u16()?
+            },
             vertical_justification: self.cursor(&just[2..]).u16()?,
             vertical_balance_columns: self.cursor(&just[20..]).u16()? != 0,
             auto_sizing_type: auto_sizing.then(|| self.enc().u16_at(&just, 22)).flatten(),
@@ -1001,15 +1028,19 @@ impl<'a> Reader<'a> {
         let Some(d) = self.chunk(uid, id)? else {
             return Ok(None);
         };
-        if d.len() < 44 {
+        // InDesign 2.0 stores the first 40 bytes only, without the master
+        // page flag and the side (`objects.md`, text wrap of InDesign 2.0):
+        // they get the values of `ApplyToMasterPageOnly="false"` and
+        // `BothSides`.
+        let short = d.len() == 40 && self.enc().indesign_2();
+        if d.len() < 44 && !short {
             return Ok(None);
         }
         let mut c = self.cursor(&d);
         let mode = c.u32()?;
         let path_uid = c.u32()?;
         let offsets = [c.f64()?, c.f64()?, c.f64()?, c.f64()?];
-        let master_flag = c.u16()?;
-        let side = c.u16()?;
+        let (master_flag, side) = if short { (1, 0) } else { (c.u16()?, c.u16()?) };
         if !matches!(
             mode,
             wrap_mode::NONE | wrap_mode::JUMP_OBJECT | wrap_mode::BOUNDING_BOX | wrap_mode::CONTOUR
@@ -1443,6 +1474,13 @@ impl<'a> Reader<'a> {
             Some(d) if d.len() >= 12 => self.link(self.cursor(&d[8..]).u32()?)?,
             _ => None,
         };
+        // Images of InDesign 2.0 name their link in an old link object.
+        let link = match link {
+            None if kind == GraphicKind::Image && self.enc().indesign_2() => {
+                self.old_link_2(uid)?.map(|l| (l, None))
+            }
+            link => link,
+        };
         let (link, contents) = match link {
             Some((link, data)) => (Some(link), data),
             None => {
@@ -1668,6 +1706,36 @@ impl<'a> Reader<'a> {
             Some(d) if d.len() >= 4 => self.cursor(&d).u32()? != 0,
             _ => false,
         })
+    }
+
+    /// The link of an image of InDesign 2.0: chunk 0x8C1B names an object
+    /// of class 0x8C01 whose chunk 0x8C04 holds the file's path at offset
+    /// 24 (`objects.md`, links of InDesign 2.0). Only drive-letter paths
+    /// are known; for other paths, or a chunk that does not parse, there
+    /// is no link and a warning.
+    fn old_link_2(&self, uid: u32) -> Result<Option<Link>, Error> {
+        let object = match self.chunk(uid, chunk::OLD_GRAPHIC_LINK)? {
+            Some(d) if d.len() >= 4 => self.cursor(&d).u32()?,
+            _ => return Ok(None),
+        };
+        if object == 0 || self.class(object) != Some(class::OLD_LINK) {
+            return Ok(None);
+        }
+        let path = match self.chunk(object, chunk::OLD_LINK_PATH)? {
+            Some(d) if d.len() > 24 => self.cursor(&d[24..]).name().ok(),
+            _ => None,
+        };
+        match path.and_then(|p| windows_file_uri(&p.name)) {
+            Some(uri) => Ok(Some(Link {
+                uid: object,
+                uri,
+                ..Link::default()
+            })),
+            None => {
+                self.warn(format!("image {uid}: path of link {object} not read"));
+                Ok(None)
+            }
+        }
     }
 
     /// The raw data object of graphic `uid`'s preview, if it names one.
@@ -2234,5 +2302,118 @@ mod preview_tests {
         let image = reader.graphic(18).unwrap().unwrap();
         assert_eq!(image.contents, None);
         assert_eq!(image.preview, Some(12));
+    }
+}
+
+#[cfg(test)]
+mod old_link_tests {
+    use super::*;
+    use crate::database::synthetic;
+    use crate::header::{ByteOrder, Version};
+
+    #[test]
+    fn sets_the_first_baseline_of_indesign_2_frames() {
+        // Chunk 0x2D1 (one column) and the 26-byte chunk 0x2CE of 2.0.
+        let mut cols = 1u32.to_le_bytes().to_vec();
+        cols.resize(22, 0);
+        let mut just = vec![0u8; 26];
+        just[6] = 1;
+        let objects = [
+            (10, class::SPLINE_ITEM, Vec::new()),
+            (
+                11,
+                0x263,
+                synthetic::chunks(&[
+                    (chunk::FRAME_COLUMNS, cols),
+                    (chunk::FRAME_JUSTIFICATION, just),
+                ]),
+            ),
+        ];
+        let bytes = synthetic::image(&objects);
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let first = |db: &crate::database::Database| {
+            Reader::new(db)
+                .text_frame_preferences(10, 11)
+                .unwrap()
+                .unwrap()
+                .first_baseline_offset
+        };
+        // `AscentOffset` in a 2.0 file, the stored code (0) otherwise.
+        assert_eq!(first(&synthetic::database_in(&bytes, &objects, v2)), 1);
+        assert_eq!(first(&synthetic::database(&bytes, &objects)), 0);
+    }
+
+    #[test]
+    fn reads_the_text_wrap_of_indesign_2() {
+        let mut d = 6u32.to_le_bytes().to_vec();
+        d.extend_from_slice(&11u32.to_le_bytes());
+        for v in [1.0f64, 1.0, 4.0, 1.0] {
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(d.len(), 40);
+        let objects = [(
+            10,
+            class::SPLINE_ITEM,
+            synthetic::chunks(&[(chunk::TEXT_WRAP, d)]),
+        )];
+        let bytes = synthetic::image(&objects);
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let db = synthetic::database_in(&bytes, &objects, v2);
+        let w = Reader::new(&db)
+            .wrap_chunk(10, chunk::TEXT_WRAP)
+            .unwrap()
+            .unwrap();
+        assert_eq!((w.mode, w.path_uid), (6, 11));
+        assert_eq!(w.offsets, [1.0, 1.0, 4.0, 1.0]);
+        // `ApplyToMasterPageOnly="false"`, `BothSides`.
+        assert_eq!((w.master_flag, w.side), (1, 0));
+        // A 40-byte chunk in a later file is still not read.
+        let db = synthetic::database(&bytes, &objects);
+        assert_eq!(
+            Reader::new(&db).wrap_chunk(10, chunk::TEXT_WRAP).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn makes_file_uris_of_windows_paths() {
+        assert_eq!(
+            windows_file_uri(r"C:\Dir\Sub dir\a b.tif").as_deref(),
+            Some("file:C:/Dir/Sub%20dir/a%20b.tif")
+        );
+        assert_eq!(windows_file_uri("Disk:Folder:a.tif"), None);
+        assert_eq!(windows_file_uri(""), None);
+    }
+
+    #[test]
+    fn reads_the_image_links_of_indesign_2() {
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let mut path = vec![0u8; 24];
+        path.extend(synthetic::flagged_string(v2, 0, r"C:\Images\photo 1.tif"));
+        let objects = [
+            (
+                10,
+                class::IMAGE,
+                synthetic::chunks(&[(chunk::OLD_GRAPHIC_LINK, 11u32.to_le_bytes().to_vec())]),
+            ),
+            (
+                11,
+                class::OLD_LINK,
+                synthetic::chunks(&[
+                    (chunk::OLD_LINK_PATH, path),
+                    (chunk::OLD_GRAPHIC_LINK, 10u32.to_le_bytes().to_vec()),
+                ]),
+            ),
+        ];
+        let bytes = synthetic::image(&objects);
+        let db = synthetic::database_in(&bytes, &objects, v2);
+        let image = Reader::new(&db).graphic(10).unwrap().unwrap();
+        let link = image.link.unwrap();
+        assert_eq!((link.uid, link.class), (11, 0));
+        assert_eq!(link.uri, "file:C:/Images/photo%201.tif");
+        assert_eq!(image.contents, None);
+        // The same objects in a later file: no link is read.
+        let db = synthetic::database(&bytes, &objects);
+        assert_eq!(Reader::new(&db).graphic(10).unwrap().unwrap().link, None);
     }
 }

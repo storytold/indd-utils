@@ -89,7 +89,7 @@ Status values:
 | Path names in a legacy code page | keys 0x7D and 0x80 of image chunk 0x1708 | 10 pairs | open: not decoded | 11 `PhotoshopPath` images whose path name is stored as code page 949 or Shift-JIS bytes; the file does not record the code page, and `AppliedPathName` is left out | `objects.md`, clipping path settings |
 | `Index` of an `AlphaChannel` clipping | chunk 0x2C1A | 1 pair | open: no field found | the image stores -1 at 23 and IDML has 0; left out | `objects.md`, clipping path settings |
 | `InvertPath` and `RestrictToFrame` bits | chunk 0x2C1A, byte 25 | 1 pair | open: never varies | bits 0x01 and 0x08 are set together in the one sample; written only when both are equal | `objects.md`, clipping path settings |
-| Images that name an old link object | image chunk 0x8C1B (class 0x8C01), InDesign 2.0 to 5.0 | 79 files | open: no pair | 762 images; the converter writes no `Contents` for them and returns their preview | `objects.md`, images that keep their file in their preview |
+| Images that name an old link object | image chunk 0x8C1B (class 0x8C01), InDesign 2.0 to 5.0 | 79 files | open: no pair | 762 images; the converter writes no `Contents` for them and returns their preview; in 2.0 files it reads the link's path | `objects.md`, images that keep their file in their preview; links of InDesign 2.0 |
 | EPS `Contents` that differ | placed graphics | – | open: not examined | 18 of 515 | `objects.md`, graphics pasted without a link |
 | Anchored settings of some nested items | `AnchoredObjectSetting` | 3 | open: not examined | 388 values | `objects.md`, items inside an anchored item |
 | `FlexObject` | page items | 20–28 pairs | open: not decoded | structures not written | |

@@ -193,6 +193,20 @@ impl<'a> Reader<'a> {
         let Some(d) = self.chunk(uid, chunk::DOCUMENT_PREFERENCES)? else {
             return Ok(None);
         };
+        // InDesign 2.0: the first 46 bytes of the 126-byte layout, without
+        // bleed and slug (`preferences.md`, the 50-byte chunk).
+        if d.len() == 50 && self.enc().indesign_2() {
+            let mut c = self.cursor(&d[16..]);
+            let (page_width, page_height) = (c.f64()?, c.f64()?);
+            return Ok(Some(DocumentPreferences {
+                page_width,
+                page_height,
+                facing_pages: d[38] == 2,
+                bleed: [0.0; 4],
+                intent: u32::from(d[32]),
+                page_binding: self.cursor(&d[44..]).u16()?,
+            }));
+        }
         let Some(l) = SetupLayout::of(d.len()) else {
             self.warn(format!(
                 "document preferences of {} bytes are not known; left out",
@@ -914,5 +928,47 @@ mod shading_tests {
         let mut space = le;
         space[56] = 3;
         assert!(axial_shading_be(Encoding::default(), &space).is_err());
+    }
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+    use crate::database::synthetic;
+    use crate::header::{ByteOrder, Version};
+
+    #[test]
+    fn reads_the_document_setup_of_indesign_2() {
+        let mut d = vec![0u8; 50];
+        d[16..24].copy_from_slice(&612f64.to_le_bytes());
+        d[24..32].copy_from_slice(&792f64.to_le_bytes());
+        d[34] = 1;
+        d[38] = 2;
+        d[42] = 1;
+        let objects = [(
+            3,
+            class::PREFERENCES,
+            synthetic::chunks(&[(chunk::DOCUMENT_PREFERENCES, d)]),
+        )];
+        let bytes = synthetic::image(&objects);
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let db = synthetic::database_in(&bytes, &objects, v2);
+        let reader = Reader::new(&db);
+        assert_eq!(
+            reader.document_preferences().unwrap(),
+            Some(DocumentPreferences {
+                page_width: 612.0,
+                page_height: 792.0,
+                facing_pages: true,
+                bleed: [0.0; 4],
+                intent: 0,
+                page_binding: 0,
+            })
+        );
+        assert!(reader.warnings.borrow().is_empty());
+        // The same chunk in a later file is still not known.
+        let db = synthetic::database(&bytes, &objects);
+        let reader = Reader::new(&db);
+        assert_eq!(reader.document_preferences().unwrap(), None);
     }
 }

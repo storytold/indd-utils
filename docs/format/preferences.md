@@ -168,6 +168,19 @@ bleeds 11 of 11 (all four 8.504 in 3, 0 in the others), uniform bleed
 `true` and uniform slug `false` in 11, slugs all 0. As the four bleeds
 are equal in every sample, their order follows the 146-byte chunk.
 
+**The 50-byte chunk.** Files from InDesign 2.0 have a 50-byte chunk
+0x533 whose bytes up to 46 follow the 126-byte layout: f64 page width
+and height at 16 and 24, u8 intent at 32, u8 facing pages at 38 (2
+facing), u16 page binding at 44. It has no bleed or slug fields; the
+converter writes the bleeds as 0. Evidence: three privately held 2.0
+documents with their print PDFs (`objects.md`, the story list of
+InDesign 2.0): the chunk is 50 bytes in 3 of 3; the page size at 16 and
+24 is the size of every page of the PDF and of every page object in 3
+of 3 (612 × 792 pt); byte 38 is 2 in 3 of 3, and every document has
+spreads of two pages, as facing documents do; byte 32 (intent) and the
+binding are 0 in 3 of 3. Before this, the converter left the chunk out
+with a warning and wrote no page size or facing pages.
+
 ## Grids (`GridPreference`)
 
 Chunk 0x55F (36 bytes in all 654 files): f64 at 2 `BaselineDivision`,
@@ -320,6 +333,14 @@ Chunk 0x5D2: f64 horizontal and vertical margin at 0 and 8, written as
 without it have `-1 72` and 72, except one stale pair. Four u32 UIDs of
 interface colours follow; the IDML colours (`LightGray`, `GridBlue`) are
 not in the table of `objects.md`, so they are not written.
+
+The converter does not read the preferences of files from before 7.0
+(their layouts are not known; no IDML pair exists). For them it writes
+the values of IDML without the chunk, `-1 72` and 72, rather than no
+`PasteboardMargins` and `MinimumSpaceAboveAndBelow` at all; the spread
+positions of these files follow from these values (`objects.md`,
+spreads). Big-endian files of 7.0 and later, whose preferences are not
+read either, are left as they were: their pairs may have the chunk.
 
 From DOM 9 the chunk has 34 bytes, and byte 32 is
 `MatchPreviewBackgroundToThemeColor` (4 `true`): 199 of 199 files with

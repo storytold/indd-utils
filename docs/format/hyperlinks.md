@@ -399,6 +399,19 @@ text sources (classes 0x13502 and 0x13503), destinations (0x13504,
 a list longer than the chunk. The other hyperlink objects of 5.0 files
 are described below.
 
+**Document lists of InDesign 2.0.** Files from InDesign 2.0 that have
+chunk 0x13501 lay it out as three UID lists and nothing else: text
+sources, destinations, hyperlinks. There is no bookmark list. Evidence:
+six privately held 2.0 documents with their print PDFs have the chunk
+(three earlier ones do not; `objects.md`, the story list of InDesign
+2.0). In all six the three lists end the chunk exactly (16 or 24 bytes),
+the first and third are empty, and the second lists every object of
+class 0x13506 in the file (1 in four files, 3 in two), URL destinations
+whose chunk 0x13509 holds a URL. No file has a bookmark (class 0x1354C).
+Read with the 3.0 layout, the fourth list runs past the chunk, and the
+conversion failed. The converter reads the three lists and returns no
+bookmarks.
+
 ## InDesign 5.0
 
 No 5.0 file has an IDML. The following is from the 17 5.0 files with

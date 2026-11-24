@@ -484,6 +484,15 @@ impl Bookmark {
 /// bookmarks (`docs/format/hyperlinks.md`).
 pub fn document_bookmarks(enc: Encoding, data: &[u8], major: u32) -> Result<Vec<u32>, Error> {
     let mut c = enc.cursor(data);
+    // InDesign 2.0: three UID lists (text sources, destinations,
+    // hyperlinks) and no bookmark list (`hyperlinks.md`, document lists of
+    // InDesign 2.0).
+    if major <= 2 {
+        for _ in 0..3 {
+            c.u32_list()?;
+        }
+        return Ok(Vec::new());
+    }
     if major <= 5 {
         for _ in 0..3 {
             c.u32_list()?;
@@ -683,5 +692,23 @@ mod tests {
         .unwrap();
         let got: Vec<_> = ranges.iter().map(|r| (r.start, r.len, r.source)).collect();
         assert_eq!(got, [(122, 22, 0xA), (260, 38, 0xB), (380, 15, 0xC)]);
+    }
+}
+
+#[cfg(test)]
+mod document_list_tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_document_lists_of_indesign_2() {
+        let enc = Encoding::default();
+        // No text sources, one URL destination (UID 1174), no hyperlinks.
+        let mut d = Vec::new();
+        for v in [0u32, 1, 1174, 0] {
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(document_bookmarks(enc, &d, 2).unwrap(), Vec::<u32>::new());
+        // Read as a 3.0 to 5.0 chunk, the fourth list is missing.
+        assert!(document_bookmarks(enc, &d, 4).is_err());
     }
 }

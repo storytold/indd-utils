@@ -4418,6 +4418,18 @@ and otherwise `Horizontal`, the value every IDML has. A story whose
 frames disagree or have another matrix gets a warning. Two frames in
 the InDesign 3.0 file have no chunk 0x2DE; they do not count.
 
+Numerical tolerance (2026-10-22): in two privately held, pre-existing
+documents, `indd dump` found four matrices `1 0 0 0.9999999999999929`
+and three matrices `1 0 0 0.9999999999999964`; the other fifteen frames
+had exact identity matrices. Exact equality unnecessarily warned on
+those seven near-identity frames. The orientation classifier now accepts
+an absolute coefficient error of at most `64 * f64::EPSILON` (about
+1.42e-14) around either documented matrix. This is a rounding policy,
+not a newly inferred orientation mapping or a visual-fidelity claim.
+Synthetic tests also cover the quarter-turn matrix with rounding,
+meaningful scaling/shear, the opposite rotation, NaN and infinity.
+Private source paths and the dump logs remain outside the repository.
+
 **First baseline offset.** IDML writes `FirstBaselineOffset` on a frame's
 `TextFramePreference` only when it differs from the frame's object style.
 Over the frames of the corpus pairs, compared with the value written on

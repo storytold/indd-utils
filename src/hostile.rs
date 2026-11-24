@@ -691,3 +691,98 @@ fn hostile_fixture_files() {
     }
     run(cases);
 }
+
+/// A document whose items nest far deeper than the model reads converts
+/// on a thread with the default stack of a spawned thread, in a debug
+/// build too: the depth cap stops the reader, and the writer, before the
+/// stack runs out. The items alternate between groups and buttons whose
+/// one state shows the next item, the two ways items contain items.
+#[test]
+fn deeply_nested_items_convert() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let le = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let child_list =
+                |uids: &[u32]| [vec![0; 8], le(&[uids.len() as u32]), le(uids)].concat();
+            // Layer settings: two u16 flags, 14 bytes, the name, 4 bytes.
+            let mut props = vec![0, 0, 1, 0];
+            props.extend([0; 14]);
+            props.extend(synthetic::flagged_string(
+                crate::Encoding::default(),
+                0,
+                "Layer 1",
+            ));
+            props.extend([0; 4]);
+            let doc = [
+                (chunk::DOC_LAYERS, le(&[1, 2])),
+                (chunk::DOC_SPREADS, le(&[1, 3])),
+            ];
+            let spread_layer = [
+                (chunk::SPREAD_LAYER_LAYER, le(&[2])),
+                (chunk::SPREAD_LAYER_CHILDREN, child_list(&[10])),
+            ];
+            let mut objects = vec![
+                (1, class::DOCUMENT, synthetic::chunks(&doc)),
+                (
+                    2,
+                    class::LAYER,
+                    synthetic::chunks(&[(chunk::LAYER_PROPS, props)]),
+                ),
+                (
+                    3,
+                    class::SPREAD,
+                    synthetic::chunks(&[(chunk::SPREAD_CHILDREN, child_list(&[4]))]),
+                ),
+                (4, class::SPREAD_LAYER, synthetic::chunks(&spread_layer)),
+            ];
+            let last = 10 + 300;
+            for uid in 10..=last {
+                let next = &[uid + 1][..(uid < last) as usize];
+                if uid % 2 == 0 {
+                    // Active state 0; state 0, enabled, with key 1, which
+                    // shows the next item.
+                    let mut states = le(&[0, 1, 0]);
+                    states.extend([1, 0, 1, 0, 0, 0]);
+                    let mut items = le(&[0, 0, 1, 1, next.len() as u32]);
+                    items.extend(le(next));
+                    let chunks = [
+                        (chunk::FORM_STATES, states),
+                        (chunk::FORM_STATE_ITEMS, items),
+                    ];
+                    objects.push((uid, class::BUTTON, synthetic::chunks(&chunks)));
+                } else {
+                    let chunks = [(chunk::ITEM_HIERARCHY, child_list(next))];
+                    objects.push((uid, class::GROUP, synthetic::chunks(&chunks)));
+                }
+            }
+            let bytes = synthetic::image(&objects);
+            let db = synthetic::database(&bytes, &objects);
+            let doc = crate::model::Reader::new(&db)
+                .document(Version {
+                    major: 20,
+                    minor: 0,
+                })
+                .unwrap();
+            let mut item = &doc.spreads[0].items[0];
+            let mut depth = 1;
+            while let Some(child) = match &item.kind {
+                crate::model::ItemKind::Form(f) => f.states.first().and_then(|s| s.items.first()),
+                _ => item.children.first(),
+            } {
+                item = child;
+                depth += 1;
+            }
+            assert!(depth < 300, "{depth}");
+            let nested: Vec<_> = doc
+                .warnings
+                .iter()
+                .filter(|w| w.contains("nested more than"))
+                .collect();
+            assert_eq!(nested.len(), 1, "{:?}", doc.warnings);
+            crate::idml::write(&doc, "nested.indd", std::io::sink()).unwrap();
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

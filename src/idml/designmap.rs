@@ -1322,6 +1322,38 @@ impl Writer<'_> {
                 }
                 x.end();
             }
+            0xCAAD => {
+                x.start("MatchCharacterStylePreference");
+                text(x, "TextBefore");
+                text(x, "TextAfter");
+                x.attr("AppliedCharacterStyle", self.style_ref(v.style, false));
+                if let Some(st) = &v.settings {
+                    match st.c {
+                        0 => {
+                            x.attr("SearchStrategy", "FirstOnPage");
+                        }
+                        1 => {
+                            x.attr("SearchStrategy", "LastOnPage");
+                        }
+                        _ => {}
+                    }
+                    match st.a {
+                        0 | 0xCAC9 => {
+                            x.attr("ChangeCase", "None");
+                        }
+                        0xCAD0 => {
+                            x.attr("ChangeCase", "Sentencecase");
+                        }
+                        _ => {}
+                    }
+                }
+                // Every corpus sample is `false`; no field is known for it
+                // (text-variables.md, running headers).
+                if same || v.settings.as_ref().is_some_and(|st| st.c <= 1) {
+                    x.attr("DeleteEndPunctuation", "false");
+                }
+                x.end();
+            }
             // Chapter numbers: the format code is the first u32
             // (text-variables.md, settings).
             0xCAA9 if v.settings.is_some() => {
@@ -1421,7 +1453,7 @@ impl Writer<'_> {
                     .unwrap_or(&self.name)
                     .to_string(),
             ),
-            Some(d) if d.kind == 0xCAAA && self.on_master(story) => {
+            Some(d) if matches!(d.kind, 0xCAAA | 0xCAAD) && self.on_master(story) => {
                 around(d, &format!("<{}>", d.name))
             }
             Some(d) if d.kind == 0xCAA9 && d.settings.as_ref().is_some_and(|s| s.a == 0) => self
